@@ -101,6 +101,8 @@ test.describe('AC-06 cancellation (U/D: status change, never a hard delete)', ()
     expect(await replay.json()).toEqual(cancelledRecord);
 
     expect(await sessions(request)).toEqual(after);
+    const stored = await request.get(`/reservations/${record.id}`);
+    expect(await stored.json(), 'GET by ID must show the cancelled record').toEqual(cancelledRecord);
     expect(app.rows()).toEqual([expect.objectContaining({ id: record.id, status: 'cancelled' })]);
   });
 
@@ -109,7 +111,12 @@ test.describe('AC-06 cancellation (U/D: status change, never a hard delete)', ()
     await request.post(`/reservations/${first.id}/cancel`, { data: {} });
     const second = await reserve(request, 'K2');
     expect(second.status()).toBe(201);
-    expect((await second.json()).id).not.toBe(first.id);
+    const secondRecord = await second.json();
+    expect(secondRecord.id, 'a new key must create a new reservation, not reuse the cancelled one').not.toBe(first.id);
+    const stored = await (await request.get(`/reservations/${secondRecord.id}`)).json();
+    expect(stored, 'the new reservation must be stored as active').toMatchObject({ requestKey: 'K2', status: 'active' });
+    expect((await (await request.get(`/reservations/${first.id}`)).json()).status,
+      'the cancelled reservation must stay cancelled').toBe('cancelled');
     expect((await sessions(request))['CT-101'].activeCount).toBe(1);
   });
 

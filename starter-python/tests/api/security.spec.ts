@@ -85,7 +85,10 @@ test.describe('CSRF and cross-origin writes', () => {
     const response = await request.post('/reservations', {
       data: reserveBody('K1'), headers: { Origin: app.baseURL },
     });
-    expect(response.status()).toBe(201);
+    expect(response.status(), 'the origin check must not block the app itself').toBe(201);
+    const record = await response.json();
+    expect(await (await request.get(`/reservations/${record.id}`)).json()).toEqual(record);
+    expect(app.rows()).toEqual([expect.objectContaining({ id: record.id, status: 'active' })]);
   });
 
   for (const contentType of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data']) {
