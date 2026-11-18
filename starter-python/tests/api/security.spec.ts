@@ -81,6 +81,37 @@ test.describe('CSRF and cross-origin writes', () => {
     }
   });
 
+  // Found by probing after the suite was green: Origin and Host both set to the attacker's
+  // rebound name passed the Origin==Host check, and the write returned 201.
+  test('DNS rebinding — a foreign Host is refused for reads and writes', async ({ app }) => {
+    const send = (method: string, path: string, host: string, body?: string) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = httpRequest(`${app.baseURL}${path}`, {
+          method,
+          headers: { Host: host, Origin: `http://${host}`, 'Content-Type': 'application/json',
+            ...(body ? { 'Content-Length': String(Buffer.byteLength(body)) } : {}) },
+        }, (res) => {
+          let text = '';
+          res.on('data', (c) => (text += c));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text }));
+        });
+        req.on('error', reject);
+        req.end(body);
+      });
+    const rebound = `attacker.example:${app.port}`;
+    const write = await send('POST', '/reservations', rebound, JSON.stringify(reserveBody('K1')));
+    expect(write.status, 'a rebound write must be refused').toBe(403);
+    expect(JSON.parse(write.body).error.code).toBe('HOST_FORBIDDEN');
+    const read = await send('GET', '/reservations', rebound);
+    expect(read.status, 'a rebound read must not leak the reservation list').toBe(403);
+    expect(read.body).not.toContain('reservations');
+    expect(app.rows(), 'nothing may be stored').toEqual([]);
+
+    const local = await send('POST', '/reservations', `localhost:${app.port}`, JSON.stringify(reserveBody('K2')));
+    expect(local.status, 'localhost is our own name and must work').toBe(201);
+    expect(app.rows()).toEqual([expect.objectContaining({ request_key: 'K2' })]);
+  });
+
   test('a same-origin POST is accepted', async ({ request, app }) => {
     const response = await request.post('/reservations', {
       data: reserveBody('K1'), headers: { Origin: app.baseURL },

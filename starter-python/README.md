@@ -47,7 +47,7 @@ The paths and field names follow `docs/api-contract.md` exactly, and `adapter.js
 | Method and path | Success | Rejections (always 4xx + `{"error":{"code","message"}}`) |
 | --- | --- | --- |
 | `GET /sessions` | 200 `{"sessions":[{id,title,capacity,activeCount,remainingSeats}]}` | — |
-| `POST /reservations` | **201** new, **200** replay of the same key | 400 validation, 404 unknown session, 409 `CAPACITY_FULL` / `REQUEST_KEY_CONFLICT`, 413, 415, 403 cross-origin |
+| `POST /reservations` | **201** new, **200** replay of the same key | 400 validation, 404 unknown session, 409 `CAPACITY_FULL` / `REQUEST_KEY_CONFLICT`, 413, 415, 403 cross-origin `Origin` or foreign `Host` (every endpoint) |
 | `GET /reservations/{id}` | 200 record | 404 |
 | `POST /reservations/{id}/cancel` with `{}` | 200 cancelled record (also on repeat) | 404, 400 non-empty body |
 | `GET /reservations?sessionId=&status=` | 200 `{"reservations":[…]}` (extra: drives the UI list) | 400 bad status |
@@ -76,7 +76,7 @@ These rules come from the PRD:
 | Suite | Command | Needs |
 | --- | --- | --- |
 | Unit, store rules (14) | `py -3 -m unittest -v test_app` | Python only |
-| API, security and UI (Playwright) | `npm ci` once, then `npx playwright test` | Node 20+ (built with 24.21) |
+| API, security and UI (Playwright) | `npm ci` once, then `npx playwright test` | Node 22.13+ for `node:sqlite` — only 24.21 has actually been run |
 | Type check | `npm run typecheck` | Node |
 
 Both runners return a nonzero exit on any failure. Playwright runs with `retries: 0` and `forbidOnly`.
@@ -101,8 +101,13 @@ The page is served with a CSP that forbids inline scripts, and user text is only
 
 - **No rate limiting.** It would break the mandated AC-04 concurrency probe. Body size, field lengths and
   socket idle time are capped instead.
-- **No authentication or authorisation.** The PRD excludes it, so OWASP API1/API5 (object- and
-  function-level access) are out of scope. IDs are random UUIDv4.
+- **No authentication or authorisation, so not OWASP A01/API1/API5 compliant.** The PRD excludes
+  users. `GET /reservations` lists every ID, alias and request key to anyone who can reach the
+  port, so anyone on this machine can cancel any reservation. Random IDs do not change that.
+- **DNS rebinding is blocked** by a `Host` allow-list (`127.0.0.1:<port>`, `localhost:<port>`). Before
+  this, a rebound page could book and cancel seats (found by probing, after the suite was green).
+- **One alias can hold several seats** with different request keys. The PRD allows it; nothing limits it.
+- **Not checked:** dependency audit (`npm audit`), fuzzing, DAST/SAST scanning.
 - **Bounded race evidence.** The ten race batches show nothing went wrong in those trials. They do not prove
   the app is race-free. Writes use SQLite `BEGIN IMMEDIATE`, which takes the write lock before the
   capacity read.

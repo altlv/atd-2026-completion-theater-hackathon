@@ -103,11 +103,15 @@ Every item has a test in `tests/api/security.spec.ts`. Keep it that way when cha
   No rate limiter — it would break the mandated AC-04 concurrency probe; documented as a gap.
 - **CSRF / cross-origin:** POST requires `Content-Type: application/json` (415) and a same-origin
   `Origin` when one is sent (403). No CORS headers are ever emitted.
+- **DNS rebinding:** every request must carry `Host: 127.0.0.1:<port>` or `localhost:<port>` (403
+  otherwise). Origin==Host alone is not enough: a rebound attacker controls both.
 - **Misconfiguration (API8):** CSP, `nosniff`, `frame-ancestors 'none'`/`X-Frame-Options`,
   `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on API; `Server` header has no version;
   every error is JSON, including 404/405/501; no stack trace leaves the process.
-- **Broken object authorisation (API1):** out of scope — the PRD has no users. IDs are random
-  UUIDv4, not sequential, so they cannot be enumerated. Stated as a limit, not a pass.
+- **Broken object authorisation (API1/API5, A01): NOT compliant.** The PRD has no users, and
+  `GET /reservations` lists every ID, alias and request key to anyone who can reach the port, so
+  anyone local can cancel anything. Random UUIDv4 IDs do NOT help while that list exists. Stated
+  as a limit, never as a pass.
 - Binds `127.0.0.1` only. Static files are an allow-list — no path is joined from the URL.
 
 ## Gotchas

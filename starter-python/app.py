@@ -174,6 +174,15 @@ class Handler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             raise StoreError(400, 'MALFORMED_JSON', 'Request body is not valid JSON.')
 
+    def _check_host(self):
+        """DNS rebinding: a hostile site resolving its own name to 127.0.0.1 sends a matching
+        Host and Origin, which an Origin==Host check accepts. Only our own names are served."""
+        port = self.server.server_port
+        allowed = {'127.0.0.1:%d' % port, 'localhost:%d' % port}
+        if self.headers.get('Host', '').lower() not in allowed:
+            self.close_connection = True
+            raise StoreError(403, 'HOST_FORBIDDEN', 'Unrecognised Host header.')
+
     def _check_origin(self):
         """A browser on another origin may not drive writes (CSRF)."""
         origin = self.headers.get('Origin')
@@ -187,6 +196,7 @@ class Handler(BaseHTTPRequestHandler):
         self._t0 = time.perf_counter()
         self._event = None
         try:
+            self._check_host()
             handler()
         except StoreError as err:
             self._event = {'event': 'rejected', 'code': err.code}
