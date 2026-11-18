@@ -128,6 +128,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- logging -----------------------------------------------------------------
 
+    def parse_request(self):
+        # Every request passes here first, including 405s and malformed ones, so the log
+        # state is reset per request rather than inherited from the previous one on a
+        # kept-alive connection (K1: a refused DELETE was logged as reservation.created).
+        self._t0 = time.perf_counter()
+        self._event = None
+        return super().parse_request()
+
     def log_request(self, code='-', size='-'):
         started = getattr(self, '_t0', None)
         record = {

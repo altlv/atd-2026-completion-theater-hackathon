@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { Agent, request as httpRequest } from 'node:http';
 import { join } from 'node:path';
 import { test, expect, reserve, sessions } from '../support/fixtures.js';
 
@@ -26,6 +27,30 @@ test.describe('server log', () => {
     expect(lines.every((l) => typeof l.ts === 'string')).toBe(true);
     expect(text, 'aliases must not be logged').not.toContain('Zelda');
     expect(text, 'request keys must not be logged').not.toContain('secret-key-1');
+  });
+
+  // K1: on one kept-alive connection, a refused DELETE inherited the previous POST's event.
+  test('a refused request on a kept-alive connection logs no event it did not have', async ({ app }) => {
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const send = (method: string, path: string, body?: string) =>
+      new Promise<number>((resolve, reject) => {
+        const req = httpRequest(`${app.baseURL}${path}`, {
+          method, agent,
+          headers: body ? { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(body)) } : {},
+        }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode ?? 0)); });
+        req.on('error', reject);
+        req.end(body);
+      });
+    expect(await send('POST', '/reservations', JSON.stringify({ sessionId: 'CT-101', attendeeAlias: 'Ada', requestKey: 'K1' }))).toBe(201);
+    expect(await send('DELETE', '/sessions')).toBe(405);
+    agent.destroy();
+
+    const lines = readFileSync(join(app.dataDir, 'server.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const deleteLine = lines.find((l) => l.method === 'DELETE');
+    expect(deleteLine, 'the DELETE must be logged').toBeDefined();
+    expect(deleteLine.status).toBe(405);
+    expect(deleteLine.event, 'a refused DELETE must not carry the previous POST\'s event').toBeUndefined();
+    expect(deleteLine.reservationId).toBeUndefined();
   });
 });
 

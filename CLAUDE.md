@@ -94,7 +94,9 @@ by a human, race-freedom beyond the bounded batches, accessibility beyond axe's 
 
 ## Security baseline (OWASP API Top 10, scoped to this PRD)
 
-Every item has a test in `tests/api/security.spec.ts`. Keep it that way when changing `app.py`.
+Each implemented control below has a test: `tests/api/security.spec.ts`, plus XSS rendering in
+`tests/ui/crud.spec.ts`. Access control is not implemented and has no test. Keep it that way when
+changing `app.py`.
 
 - **Injection (API8/A03):** parameterised SQL only; aliases are stored and returned literally.
 - **XSS:** UI writes user data with `textContent`, never `innerHTML`; CSP `script-src 'self'`.

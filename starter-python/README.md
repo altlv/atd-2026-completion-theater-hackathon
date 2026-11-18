@@ -107,7 +107,8 @@ The page is served with a CSP that forbids inline scripts, and user text is only
 - **DNS rebinding is blocked** by a `Host` allow-list (`127.0.0.1:<port>`, `localhost:<port>`). Before
   this, a rebound page could book and cancel seats (found by probing, after the suite was green).
 - **One alias can hold several seats** with different request keys. The PRD allows it; nothing limits it.
-- **Not checked:** dependency audit (`npm audit`), fuzzing, DAST/SAST scanning.
+- **`npm audit`: 0 vulnerabilities** at freeze (test tooling only; the app has no dependencies).
+  **Not checked:** fuzzing, DAST/SAST scanning, macOS/Linux.
 - **Bounded race evidence.** The ten race batches show nothing went wrong in those trials. They do not prove
   the app is race-free. Writes use SQLite `BEGIN IMMEDIATE`, which takes the write lock before the
   capacity read.
