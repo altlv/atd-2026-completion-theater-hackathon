@@ -35,6 +35,11 @@ a fresh connection, so nothing is cached in memory. To inspect it independently 
 py -3 -c "import sqlite3,sys; [print(r) for r in sqlite3.connect(sys.argv[1]).execute('select id,session_id,attendee_alias,request_key,status from reservations')]" .state/seats.db
 ```
 
+**Server log:** one JSON line per request and per startup, written to stdout and to
+`$DATA_DIR/server.log`. Fields: `ts`, `method`, `path`, `status`, `ms`, plus `event`
+(`reservation.created` / `replayed` / `cancelled` / `rejected` with `code` / `server.start` with
+`activeBySession` read from disk). Aliases and request keys are deliberately not logged.
+
 ## API
 
 The paths and field names follow `docs/api-contract.md` exactly, and `adapter.json` maps them for `tools/verify.py`.

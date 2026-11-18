@@ -152,6 +152,43 @@ test.describe('Update / delete — cancellation (AC-06)', () => {
     expect(app.rows()).toEqual([expect.objectContaining({ id: record.id, status: 'cancelled' })]);
   });
 
+  // Found by exploratory testing: after the first cancel on a page, every later confirm
+  // closed the dialog and cancelled nothing (no request, no message, seat still taken).
+  test('several cancellations in a row on one page each reach the server', async ({ page, request, app }) => {
+    const ids = [];
+    for (const [key, alias, session] of [['K1', 'Ada', 'CT-101'], ['K2', 'Bob', 'CT-102'], ['K3', 'Cy', 'CT-102']]) {
+      ids.push((await (await reserve(request, key, alias, session)).json()).id);
+    }
+    await page.goto('/');
+    for (const [alias, session] of [['Ada', 'CT-101'], ['Bob', 'CT-102'], ['Cy', 'CT-102']]) {
+      await page.getByRole('button', { name: `Cancel reservation for ${alias} in ${session}` }).click();
+      const responsePromise = page.waitForResponse((r) => r.url().endsWith('/cancel'));
+      await page.getByRole('dialog').getByRole('button', { name: 'Cancel reservation' }).click();
+      expect((await responsePromise).status(), `cancel for ${alias} must reach the server`).toBe(200);
+      await expect(rowFor(page, alias)).toContainText('Cancelled');
+      await expect(page.getByRole('heading', { name: 'Reservations' }), 'focus must not be lost to <body>').toBeFocused();
+    }
+    for (const id of ids) {
+      expect((await (await request.get(`/reservations/${id}`)).json()).status).toBe('cancelled');
+    }
+    expect(app.rows().every((r) => r.status === 'cancelled')).toBe(true);
+  });
+
+  test('an open lookup result is updated when that reservation is cancelled', async ({ page, request }) => {
+    const record = await (await reserve(request, 'K1')).json();
+    await page.goto('/');
+    await page.getByLabel('Reservation ID').fill(record.id);
+    await page.getByRole('button', { name: 'Look up' }).click();
+    await expect(page.locator('#lookup-result')).toContainText('active');
+
+    await page.getByRole('button', { name: 'Cancel reservation for Ada in CT-101' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel reservation' }).click();
+    await expect(rowFor(page, 'Ada')).toContainText('Cancelled');
+    await expect(page.locator('#lookup-result'), 'lookup must not keep showing a stale status')
+      .toContainText('cancelled');
+    await expect(page.locator('#lookup-result')).not.toContainText(/\bactive\b/);
+  });
+
   test('choosing "Keep reservation" sends nothing and keeps the seat', async ({ page, request }) => {
     const record = await (await reserve(request, 'K1')).json();
     await page.goto('/');

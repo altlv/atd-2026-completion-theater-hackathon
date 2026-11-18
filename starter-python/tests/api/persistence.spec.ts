@@ -1,4 +1,33 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test, expect, reserve, sessions } from '../support/fixtures.js';
+
+test.describe('server log', () => {
+  test('every write is logged as one JSON line with its outcome, without the alias or key', async ({ request, app }) => {
+    const record = await (await reserve(request, 'secret-key-1', 'Zelda')).json();
+    await reserve(request, 'secret-key-1', 'Zelda'); // replay
+    await reserve(request, 'K2', 'Bob', 'NOPE'); // rejected
+    await request.post(`/reservations/${record.id}/cancel`, { data: {} });
+    await app.restart();
+
+    const text = readFileSync(join(app.dataDir, 'server.log'), 'utf8');
+    const lines = text.trim().split('\n').map((l) => JSON.parse(l));
+    const events = lines.filter((l) => l.event).map((l) => [l.event, l.status ?? null, l.reservationId ?? l.code ?? null]);
+    expect(events).toEqual([
+      ['server.start', null, null],
+      ['reservation.created', 201, record.id],
+      ['reservation.replayed', 200, record.id],
+      ['rejected', 404, 'SESSION_NOT_FOUND'],
+      ['reservation.cancelled', 200, record.id],
+      ['server.start', null, null],
+    ]);
+    const lastStart = lines.filter((l) => l.event === 'server.start').at(-1);
+    expect(lastStart.activeBySession, 'the restart logs what it found on disk').toEqual({ 'CT-101': 0, 'CT-102': 0 });
+    expect(lines.every((l) => typeof l.ts === 'string')).toBe(true);
+    expect(text, 'aliases must not be logged').not.toContain('Zelda');
+    expect(text, 'request keys must not be logged').not.toContain('secret-key-1');
+  });
+});
 
 test.describe('AC-07 durable state', () => {
   test('active and cancelled records survive a real process restart without reset', async ({ request, app }) => {

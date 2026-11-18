@@ -189,6 +189,11 @@ async function refresh() {
   renderSessionOptions(sessions.data.sessions);
   if (reservations.ok) renderReservations(reservations.data.reservations);
   else warn('Could not load reservations: ' + errorMessage(reservations.data));
+  // A visible lookup result is server state too: re-read it, or it goes stale after a cancel.
+  if (lookedUpId && !els.lookupResult.hidden) {
+    const again = await api('GET', '/reservations/' + encodeURIComponent(lookedUpId));
+    if (again.ok) renderLookup(again.data);
+  }
   els.lastSync.textContent = 'Last read from the server at ' + new Date().toLocaleTimeString() + '.';
   return true;
 }
@@ -237,23 +242,34 @@ async function reserve(event) {
   }
 }
 
+// The cancel runs from the dialog form's submit event, not the dialog's close event:
+// exploratory testing found Chrome delivering no `close` event after the first cancel on a
+// page, so every later confirm closed the dialog and silently cancelled nothing.
+let pendingCancel = null;
+
 function confirmCancel(reservation) {
+  pendingCancel = reservation;
   els.dialogText.textContent = 'Cancel the seat for ' + reservation.attendeeAlias + ' in '
     + reservation.sessionId + '?';
-  els.dialog.returnValue = '';
-  els.dialog.onclose = async () => {
-    if (els.dialog.returnValue !== 'confirm') return;
-    const result = await api('POST', '/reservations/' + encodeURIComponent(reservation.id) + '/cancel', {});
-    if (result.ok) {
-      say('Cancelled the reservation for ' + result.data.attendeeAlias + ' in ' + result.data.sessionId
-        + '. The seat is free again.');
-    } else {
-      warn('Could not cancel: ' + errorMessage(result.data));
-    }
-    await refresh();
-  };
   els.dialog.showModal();
 }
+
+els.dialog.querySelector('form').addEventListener('submit', async (event) => {
+  const reservation = pendingCancel;
+  pendingCancel = null;
+  if (!reservation || !event.submitter || event.submitter.value !== 'confirm') return;
+  const result = await api('POST', '/reservations/' + encodeURIComponent(reservation.id) + '/cancel', {});
+  if (result.ok) {
+    say('Cancelled the reservation for ' + result.data.attendeeAlias + ' in ' + result.data.sessionId
+      + '. The seat is free again.');
+  } else {
+    warn('Could not cancel: ' + errorMessage(result.data));
+  }
+  await refresh();
+  // The row's Cancel button is gone after re-rendering; keep keyboard users anchored.
+  $('reservations-heading').focus();
+});
+els.dialog.addEventListener('cancel', () => { pendingCancel = null; });
 
 async function lookup(event) {
   event.preventDefault();
@@ -271,7 +287,14 @@ async function lookup(event) {
     warn('Lookup failed: ' + errorMessage(result.data));
     return;
   }
-  const r = result.data;
+  lookedUpId = result.data.id;
+  renderLookup(result.data);
+  say('Found reservation ' + result.data.id + ' (' + result.data.status + ').');
+}
+
+let lookedUpId = null;
+
+function renderLookup(r) {
   els.lookupResult.replaceChildren();
   for (const [label, value] of [['ID', r.id], ['Session', r.sessionId], ['Alias', r.attendeeAlias],
     ['Request key', r.requestKey], ['Status', r.status], ['Created', r.createdAt],
@@ -279,7 +302,6 @@ async function lookup(event) {
     els.lookupResult.append(el('dt', {}, label), el('dd', {}, value));
   }
   els.lookupResult.hidden = false;
-  say('Found reservation ' + r.id + ' (' + r.status + ').');
 }
 
 // -- wiring ------------------------------------------------------------------

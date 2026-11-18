@@ -11,7 +11,10 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import traceback
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socketserver import TCPServer
@@ -46,6 +49,25 @@ COMMON_HEADERS = {
     'Cross-Origin-Resource-Policy': 'same-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
 }
+
+
+LOG_LOCK = threading.Lock()
+LOG_PATH = None  # set in main(): $DATA_DIR/server.log
+
+
+def log_event(record):
+    """One JSON line per event, to stdout and to $DATA_DIR/server.log.
+
+    Aliases and request keys are deliberately NOT logged: the log records what happened
+    to which reservation ID, not who it was for.
+    """
+    record = {'ts': datetime.now(timezone.utc).isoformat(timespec='milliseconds'), **record}
+    line = json.dumps(record, separators=(',', ':'))
+    with LOG_LOCK:
+        print(line, flush=True)
+        if LOG_PATH is not None:
+            with open(LOG_PATH, 'a', encoding='utf-8') as handle:
+                handle.write(line + '\n')
 
 
 class LoopbackHTTPServer(ThreadingHTTPServer):
@@ -104,6 +126,23 @@ class Handler(BaseHTTPRequestHandler):
     def version_string(self):
         return self.server_version
 
+    # -- logging -----------------------------------------------------------------
+
+    def log_request(self, code='-', size='-'):
+        started = getattr(self, '_t0', None)
+        record = {
+            'level': 'info' if int(code) < 500 else 'error',
+            'method': self.command,
+            'path': urlsplit(self.path).path if getattr(self, 'path', None) else None,
+            'status': int(code),
+            'ms': round((time.perf_counter() - started) * 1000, 1) if started else None,
+        }
+        record.update(getattr(self, '_event', None) or {})
+        log_event(record)
+
+    def log_message(self, format, *args):
+        log_event({'level': 'warn', 'message': format % args})
+
     # -- request plumbing ------------------------------------------------------
 
     def _read_json(self):
@@ -145,9 +184,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dispatch(self, handler):
         self._body_consumed = False
+        self._t0 = time.perf_counter()
+        self._event = None
         try:
             handler()
         except StoreError as err:
+            self._event = {'event': 'rejected', 'code': err.code}
             if not self._body_consumed and self.headers.get('Content-Length', '0') not in ('', '0'):
                 # Rejected before reading the body: on a kept-alive connection the unread
                 # bytes would be parsed as the start of the next request (desync). Close it.
@@ -158,6 +200,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             # Full detail goes to the server log only; the client gets no stack trace.
             traceback.print_exc(file=sys.stderr)
+            self._event = {'event': 'internal_error'}
             self.close_connection = True
             self.error_response(500, 'INTERNAL_ERROR', 'Internal error. The request was not completed.')
 
@@ -213,6 +256,9 @@ class Handler(BaseHTTPRequestHandler):
             self._check_origin()
             body = self._read_json()
             created, record = self.store.reserve(body)
+            self._event = {'event': 'reservation.created' if created else 'reservation.replayed',
+                           'reservationId': record['id'], 'sessionId': record['sessionId'],
+                           'reservationStatus': record['status']}
             return self.json_response(201 if created else 200, record,
                                       {'Location': '/reservations/' + record['id']} if created else None)
         match = CANCEL_PATH.match(path)
@@ -221,7 +267,10 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             if body != {}:
                 raise StoreError(400, 'INVALID_BODY', 'Cancel takes an empty JSON object: {}.')
-            return self.json_response(200, self.store.cancel(match.group(1)))
+            record = self.store.cancel(match.group(1))
+            self._event = {'event': 'reservation.cancelled', 'reservationId': record['id'],
+                           'sessionId': record['sessionId'], 'cancelledAt': record['cancelledAt']}
+            return self.json_response(200, record)
         if path in STATIC or path in ('/health', '/sessions') or RESERVATION_PATH.match(path):
             return self._not_allowed()
         self.close_connection = True
@@ -252,9 +301,14 @@ def main():
         parser.error('No initialised fixture at %s. Run with --reset first, using the same DATA_DIR.'
                      % store.db_path)
     Handler.store = store
+    global LOG_PATH
+    LOG_PATH = store.data_dir / 'server.log'
     server = LoopbackHTTPServer(('127.0.0.1', int(os.environ.get('PORT', '8765'))), Handler)
     print('Session Seat Desk on http://127.0.0.1:%s  state=%s  pid=%s'
           % (server.server_port, store.db_path, os.getpid()), flush=True)
+    sessions = {s['id']: s['activeCount'] for s in store.sessions()}
+    log_event({'level': 'info', 'event': 'server.start', 'pid': os.getpid(), 'port': server.server_port,
+               'db': str(store.db_path), 'activeBySession': sessions})
     try:
         server.serve_forever()
     except KeyboardInterrupt:
